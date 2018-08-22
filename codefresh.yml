@@ -1,0 +1,54 @@
+version: '1.0'
+steps:
+  Preamble:
+    title: Setting up build requirements
+    image: alpine
+    commands:
+      - export EDITION=$(echo ${{CF_BRANCH}} | awk -F- '{print $1}')
+      - export VERSION=$(echo ${{CF_BRANCH}} | awk -F- '{print $2}')
+      - export DISTSITE=http://dist.neo4j.org
+      - export TARBALL=neo4j-$EDITION-$VERSION-unix.tar.gz
+      - export TARBALLURL=$DISTSITE/$TARBALL
+      - export WORKINGDIR=src/$(echo $VERSION | grep -o '^[0-9]\+.[0-9]\+')
+      - apk --no-cache add curl
+      - mkdir -p $WORKINGDIR/local-package
+      - touch $WORKINGDIR/local-package/dummy.txt
+      - curl --remote-name $TARBALLURL
+      - export SHA=$(sha256sum $TARBALL | awk '{print $1}')
+      - cf_export SHA DISTSITE TARBALL TARBALLURL EDITION VERSION WORKINGDIR
+  UpdateDockerfile:
+    title: Editing Dockerfile with specific build information
+    image: alpine
+    commands:
+     - env
+     - cat ${{CF_VOLUME_PATH}}/env_vars_to_export
+     - cd $WORKINGDIR
+     - sed -i "s|%%NEO4J_SHA%%|$SHA|" Dockerfile
+     - sed -i "s|%%NEO4J_TARBALL%%|$TARBALL|" Dockerfile
+     - sed -i "s|%%NEO4J_EDITION%%|$EDITION|" Dockerfile
+     - sed -i "s|%%NEO4J_DIST_SITE%%|$DISTSITE|" Dockerfile
+     - ls -l
+     - cat Dockerfile
+  BuildingDockerImage:
+    title: Building Docker Image
+    type: build
+    image_name: laglinaro/neo4j
+    working_directory: ./${{WORKINGDIR}}/
+    tag: '${{CF_BRANCH_TAG_NORMALIZED}}-${{CF_SHORT_REVISION}}'
+    dockerfile: Dockerfile
+  PushingCompletedBuild:
+    title: Pushing Completed Build to Docker Hub
+    type: push
+    candidate: ${{BuildingDockerImage}}
+    tag: ${{VERSION}}-${{EDITION}}
+    registry: dockerhub
+  PushingCompletedCommunityBuildToLatest:
+    title: Pushing Community build to tag 'latest'
+    type: push
+    candidate: ${{BuildingDockerImage}}
+    tag: latest
+    registry: dockerhub
+    when:
+      condition:
+        all:
+          onlyPushCommunityBuilds: '"${{EDITION}}" == "community"'
